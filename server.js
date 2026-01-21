@@ -6,7 +6,7 @@ const { MongoClient, ObjectId } = require("mongodb");
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3008;
 const MONGO_URI = process.env.MONGO_URI;
 
 const DB_NAME = "shop";
@@ -17,7 +17,7 @@ let productsCollection;
 
 async function connectDB() {
   if (!MONGO_URI) {
-    console.error("❌ MONGO_URI is not set. Add it to .env (local) or hosting env vars (production).");
+    console.error("MONGO_URI is not set. Add it to .env (local) or hosting env vars (production).");
     process.exit(1);
   }
 
@@ -27,7 +27,7 @@ async function connectDB() {
   const db = client.db(DB_NAME);
   productsCollection = db.collection(COLLECTION_NAME);
 
-  console.log(`✅ MongoDB connected: db="${DB_NAME}", collection="${COLLECTION_NAME}"`);
+  console.log(`MongoDB connected: db="${DB_NAME}", collection="${COLLECTION_NAME}"`);
 }
 
 app.get("/", (req, res) => {
