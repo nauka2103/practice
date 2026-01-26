@@ -82,6 +82,13 @@ app.get("/api/products", async (req, res) => {
         projection[f] = 1;
       }
 
+      app.get("/version", (req, res) => {
+        res.json({
+        version: "1.1",
+        updatedAt: "2026-01-18",
+        });
+      });
+
       if (!projection._id) projection._id = 0;
     }
 
@@ -248,9 +255,3 @@ process.on("SIGINT", async () => {
   }
 });
 
-app.get("/version", (req, res) => {
-  res.json({
-    version: "1.1",
-    updatedAt: "2026-01-18",
-  });
-});
