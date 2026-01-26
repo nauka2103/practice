@@ -15,9 +15,10 @@ const COLLECTION_NAME = "products";
 let client;
 let productsCollection;
 
+// ===== MongoDB connection =====
 async function connectDB() {
   if (!MONGO_URI) {
-    console.error("MONGO_URI is not set. Add it to .env (local) or hosting env vars (production).");
+    console.error("MONGO_URI is not set. Add it to .env or hosting env vars.");
     process.exit(1);
   }
 
@@ -30,6 +31,9 @@ async function connectDB() {
   console.log(`MongoDB connected: db="${DB_NAME}", collection="${COLLECTION_NAME}"`);
 }
 
+// ===== BASIC ROUTES =====
+
+// GET /
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -41,14 +45,20 @@ app.get("/", (req, res) => {
       update: "PUT /api/products/:id",
       remove: "DELETE /api/products/:id",
     },
-    queryExamples: [
-      "/api/products?category=Electronics",
-      "/api/products?minPrice=50&sort=price",
-      "/api/products?fields=name,price",
-    ],
   });
 });
 
+// GET /version  ✅ (Task 12)
+app.get("/version", (req, res) => {
+  res.json({
+    version: "1.1",
+    updatedAt: "2026-01-18",
+  });
+});
+
+// ===== PRODUCTS API =====
+
+// GET /api/products
 app.get("/api/products", async (req, res) => {
   try {
     const filter = {};
@@ -73,21 +83,11 @@ app.get("/api/products", async (req, res) => {
     let projection;
     if (req.query.fields) {
       projection = {};
-      const fields = req.query.fields
+      req.query.fields
         .split(",")
         .map((f) => f.trim())
-        .filter(Boolean);
-
-      for (const f of fields) {
-        projection[f] = 1;
-      }
-
-      app.get("/version", (req, res) => {
-        res.json({
-        version: "1.1",
-        updatedAt: "2026-01-18",
-        });
-      });
+        .filter(Boolean)
+        .forEach((f) => (projection[f] = 1));
 
       if (!projection._id) projection._id = 0;
     }
@@ -97,13 +97,14 @@ app.get("/api/products", async (req, res) => {
     if (projection) cursor = cursor.project(projection);
 
     const products = await cursor.toArray();
-    return res.json({ ok: true, count: products.length, products });
+    res.json({ ok: true, count: products.length, products });
   } catch (err) {
-    console.error("Error in GET /api/products:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error("GET /api/products error:", err);
+    res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
+// GET /api/products/:id
 app.get("/api/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -118,13 +119,14 @@ app.get("/api/products/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "Product not found" });
     }
 
-    return res.json({ ok: true, product });
+    res.json({ ok: true, product });
   } catch (err) {
-    console.error("Error in GET /api/products/:id:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error("GET /api/products/:id error:", err);
+    res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
+// POST /api/products
 app.post("/api/products", async (req, res) => {
   try {
     const { name, price, category } = req.body;
@@ -135,7 +137,7 @@ app.post("/api/products", async (req, res) => {
 
     const p = price !== undefined ? Number(price) : 0;
     if (Number.isNaN(p) || p < 0) {
-      return res.status(400).json({ ok: false, error: "price must be a non-negative number" });
+      return res.status(400).json({ ok: false, error: "price must be non-negative" });
     }
 
     const doc = {
@@ -147,15 +149,14 @@ app.post("/api/products", async (req, res) => {
     };
 
     const result = await productsCollection.insertOne(doc);
-    const created = { ...doc, _id: result.insertedId };
-
-    return res.status(201).json({ ok: true, product: created });
+    res.status(201).json({ ok: true, product: { ...doc, _id: result.insertedId } });
   } catch (err) {
-    console.error("Error in POST /api/products:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error("POST /api/products error:", err);
+    res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
+// PUT /api/products/:id
 app.put("/api/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -169,7 +170,7 @@ app.put("/api/products/:id", async (req, res) => {
 
     if (name !== undefined) {
       if (typeof name !== "string" || !name.trim()) {
-        return res.status(400).json({ ok: false, error: "name must be a non-empty string" });
+        return res.status(400).json({ ok: false, error: "name must be non-empty" });
       }
       update.name = name.trim();
     }
@@ -177,7 +178,7 @@ app.put("/api/products/:id", async (req, res) => {
     if (price !== undefined) {
       const p = Number(price);
       if (Number.isNaN(p) || p < 0) {
-        return res.status(400).json({ ok: false, error: "price must be a non-negative number" });
+        return res.status(400).json({ ok: false, error: "price must be non-negative" });
       }
       update.price = p;
     }
@@ -201,13 +202,14 @@ app.put("/api/products/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "Product not found" });
     }
 
-    return res.json({ ok: true, product: result.value });
+    res.json({ ok: true, product: result.value });
   } catch (err) {
-    console.error("Error in PUT /api/products/:id:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error("PUT /api/products error:", err);
+    res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
+// DELETE /api/products/:id
 app.delete("/api/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -222,22 +224,23 @@ app.delete("/api/products/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "Product not found" });
     }
 
-    return res.json({ ok: true, message: "Product deleted", product: result.value });
+    res.json({ ok: true, message: "Product deleted", product: result.value });
   } catch (err) {
-    console.error("Error in DELETE /api/products/:id:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error("DELETE /api/products error:", err);
+    res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
+// ===== 404 handler (MUST BE LAST) =====
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Route not found" });
 });
 
+// ===== START SERVER =====
 connectDB()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Server started on http://localhost:${PORT}`);
-      console.log(`Try: http://localhost:${PORT}/api/products`);
+      console.log(`Server started on port ${PORT}`);
     });
   })
   .catch((err) => {
@@ -245,13 +248,13 @@ connectDB()
     process.exit(1);
   });
 
+// ===== Graceful shutdown =====
 process.on("SIGINT", async () => {
   try {
     if (client) await client.close();
-    console.log("\n MongoDB connection closed. Bye!");
+    console.log("\nMongoDB connection closed. Bye!");
     process.exit(0);
-  } catch (e) {
+  } catch {
     process.exit(1);
   }
 });
-
