@@ -247,3 +247,10 @@ process.on("SIGINT", async () => {
     process.exit(1);
   }
 });
+
+app.get("/version", (req, res) => {
+  res.json({
+    version: "1.1",
+    updatedAt: "2026-01-18",
+  });
+});
