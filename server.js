@@ -1,349 +1,250 @@
 require("dotenv").config();
 
 const express = require("express");
-const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3008;
+const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
 
-// Можно поменять, но лучше оставить стабильно
-const DB_NAME = "shop";
-const COLLECTION_NAME = "items";
+let db;
 
-let client;
-let itemsCollection;
+function isValidObjectId(id) {
+  return ObjectId.isValid(id) && String(new ObjectId(id)) === id;
+}
 
-async function connectDB() {
-  if (!MONGO_URI) {
-    console.error("❌ MONGO_URI is not set. Add it to .env or hosting env vars.");
-    process.exit(1);
+function validateItemFull(body) {
+  if (!body || typeof body !== "object") return "Body must be a JSON object";
+
+  if (!body.name || typeof body.name !== "string" || !body.name.trim()) {
+    return "Field 'name' is required and must be a non-empty string";
   }
 
-  client = new MongoClient(MONGO_URI);
-  await client.connect();
-
-  const db = client.db(DB_NAME);
-  itemsCollection = db.collection(COLLECTION_NAME);
-
-  console.log(`✅ MongoDB connected: db="${DB_NAME}", collection="${COLLECTION_NAME}"`);
-}
-
-// ===== Helpers =====
-function isValidId(id) {
-  return ObjectId.isValid(id);
-}
-
-function pickAllowedFields(body) {
-  // базовая сущность item (можешь расширять)
-  const out = {};
-  if (body.name !== undefined) out.name = body.name;
-  if (body.price !== undefined) out.price = body.price;
-  if (body.category !== undefined) out.category = body.category;
-  return out;
-}
-
-function validateItemForCreate(body) {
-  const errors = [];
-
-  if (!body || typeof body !== "object") errors.push("body must be a JSON object");
-
-  const nameOk = body?.name && typeof body.name === "string" && body.name.trim();
-  if (!nameOk) errors.push("name is required (non-empty string)");
-
-  if (body?.price !== undefined) {
-    const p = Number(body.price);
-    if (Number.isNaN(p) || p < 0) errors.push("price must be a non-negative number");
+  if (body.description !== undefined && typeof body.description !== "string") {
+    return "Field 'description' must be a string";
+  }
+  if (body.quantity !== undefined && typeof body.quantity !== "number") {
+    return "Field 'quantity' must be a number";
   }
 
-  if (body?.category !== undefined && typeof body.category !== "string") {
-    errors.push("category must be a string");
-  }
-
-  return errors;
+  return null;
 }
 
-function normalizeItem(body, { requireAllFields }) {
-  // Возвращаем { ok, value, error }
-  const data = pickAllowedFields(body);
+function validateItemPartial(body) {
+  if (!body || typeof body !== "object") return "Body must be a JSON object";
 
-  if (requireAllFields) {
-    // PUT: full update — требуем name (и можно требовать остальные если хочешь)
-    if (data.name === undefined) {
-      return { ok: false, error: "PUT requires full item: name is required" };
+  const allowed = ["name", "description", "quantity"];
+  const keys = Object.keys(body);
+
+  if (keys.length === 0) return "PATCH body cannot be empty";
+
+  for (const k of keys) {
+    if (!allowed.includes(k)) return `Unknown field '${k}'`;
+  }
+
+  if (body.name !== undefined) {
+    if (typeof body.name !== "string" || !body.name.trim()) {
+      return "Field 'name' must be a non-empty string";
     }
   }
-
-  const update = {};
-
-  if (data.name !== undefined) {
-    if (typeof data.name !== "string" || !data.name.trim()) {
-      return { ok: false, error: "name must be a non-empty string" };
-    }
-    update.name = data.name.trim();
+  if (body.description !== undefined && typeof body.description !== "string") {
+    return "Field 'description' must be a string";
+  }
+  if (body.quantity !== undefined && typeof body.quantity !== "number") {
+    return "Field 'quantity' must be a number";
   }
 
-  if (data.price !== undefined) {
-    const p = Number(data.price);
-    if (Number.isNaN(p) || p < 0) {
-      return { ok: false, error: "price must be a non-negative number" };
-    }
-    update.price = p;
-  }
-
-  if (data.category !== undefined) {
-    if (typeof data.category !== "string") {
-      return { ok: false, error: "category must be a string" };
-    }
-    update.category = data.category.trim() || "general";
-  }
-
-  return { ok: true, value: update };
+  return null;
 }
 
-// ===== Basic endpoints =====
 app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    message: "API is running",
-    task: "Practice Task 13",
-    endpoints: {
-      items: {
-        list: "GET /api/items",
-        getById: "GET /api/items/:id",
-        create: "POST /api/items",
-        put: "PUT /api/items/:id",
-        patch: "PATCH /api/items/:id",
-        remove: "DELETE /api/items/:id",
-      },
-      version: "GET /version",
-    },
-  });
+  res.status(200).json({ message: "API is working" });
 });
 
 app.get("/version", (req, res) => {
-  res.json({
+  res.status(200).json({
     version: "1.2",
-    updatedAt: "2026-01-26",
+    updatedAt: "2026-01-26"
   });
 });
 
-// ===== REST API: /api/items =====
-
-// GET /api/items — retrieve all items
 app.get("/api/items", async (req, res) => {
   try {
-    // optional query examples:
-    // /api/items?category=food&minPrice=10&sort=price
-    const { category, minPrice, sort, limit = 50 } = req.query;
-
-    const filter = {};
-    if (category) filter.category = category;
-
-    if (minPrice !== undefined) {
-      const mp = Number(minPrice);
-      if (Number.isNaN(mp)) {
-        return res.status(400).json({ ok: false, error: "minPrice must be a number" });
-      }
-      filter.price = { $gte: mp };
-    }
-
-    let cursor = itemsCollection.find(filter);
-
-    if (sort === "price") cursor = cursor.sort({ price: 1 });
-    else cursor = cursor.sort({ createdAt: -1 });
-
-    const lim = Math.min(Number(limit) || 50, 200);
-    const items = await cursor.limit(lim).toArray();
-
-    return res.status(200).json({ ok: true, count: items.length, items });
+    const items = await db.collection("items").find().toArray();
+    res.status(200).json(items);
   } catch (err) {
-    console.error("GET /api/items error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// GET /api/items/:id — retrieve item by ID
 app.get("/api/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({ ok: false, error: "Invalid id" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const item = await itemsCollection.findOne({ _id: new ObjectId(id) });
+    const item = await db
+      .collection("items")
+      .findOne({ _id: new ObjectId(id) });
 
     if (!item) {
-      return res.status(404).json({ ok: false, error: "Item not found" });
+      return res.status(404).json({ error: "Not found" });
     }
 
-    return res.status(200).json({ ok: true, item });
+    res.status(200).json(item);
   } catch (err) {
-    console.error("GET /api/items/:id error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// POST /api/items — create a new item
 app.post("/api/items", async (req, res) => {
   try {
-    const errors = validateItemForCreate(req.body);
-    if (errors.length) {
-      return res.status(400).json({ ok: false, error: errors.join("; ") });
+    const validationError = validateItemFull(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
-    const name = req.body.name.trim();
-    const price = req.body.price !== undefined ? Number(req.body.price) : 0;
-    const category =
-      typeof req.body.category === "string" && req.body.category.trim()
-        ? req.body.category.trim()
-        : "general";
+    const doc = {
+      name: req.body.name.trim(),
+      description: req.body.description ?? "",
+      quantity: req.body.quantity ?? 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    const now = new Date();
-    const doc = { name, price, category, createdAt: now, updatedAt: now };
+    const result = await db.collection("items").insertOne(doc);
+    const created = await db.collection("items").findOne({ _id: result.insertedId });
 
-    const result = await itemsCollection.insertOne(doc);
-    const created = { ...doc, _id: result.insertedId };
-
-    return res.status(201).json({ ok: true, item: created });
+    res.status(201).json(created);
   } catch (err) {
-    console.error("POST /api/items error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// PUT /api/items/:id — full update
 app.put("/api/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({ ok: false, error: "Invalid id" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const normalized = normalizeItem(req.body, { requireAllFields: true });
-    if (!normalized.ok) {
-      return res.status(400).json({ ok: false, error: normalized.error });
+    const validationError = validateItemFull(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
-    // Для PUT обычно логика "полная замена". Здесь делаем "полный set":
-    // если поле не пришло — ставим дефолт (кроме name который обязателен).
-    const now = new Date();
-    const fullDoc = {
-      name: normalized.value.name, // обязателен
-      price: normalized.value.price !== undefined ? normalized.value.price : 0,
-      category: normalized.value.category !== undefined ? normalized.value.category : "general",
-      updatedAt: now,
+    const updateDoc = {
+      name: req.body.name.trim(),
+      description: req.body.description ?? "",
+      quantity: req.body.quantity ?? 0,
+      updatedAt: new Date()
     };
 
-    const result = await itemsCollection.findOneAndUpdate(
+    const result = await db.collection("items").updateOne(
       { _id: new ObjectId(id) },
-      { $set: fullDoc },
-      { returnDocument: "after" }
+      { $set: updateDoc }
     );
 
-    if (!result.value) {
-      return res.status(404).json({ ok: false, error: "Item not found" });
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Not found" });
     }
 
-    return res.status(200).json({ ok: true, item: result.value });
+    const updated = await db.collection("items").findOne({ _id: new ObjectId(id) });
+    res.status(200).json(updated);
   } catch (err) {
-    console.error("PUT /api/items/:id error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// PATCH /api/items/:id — partial update
 app.patch("/api/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({ ok: false, error: "Invalid id" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const normalized = normalizeItem(req.body, { requireAllFields: false });
-    if (!normalized.ok) {
-      return res.status(400).json({ ok: false, error: normalized.error });
+    const validationError = validateItemPartial(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
-    const update = normalized.value;
-    if (Object.keys(update).length === 0) {
-      return res.status(400).json({ ok: false, error: "PATCH requires at least one field" });
-    }
+    const patchDoc = { ...req.body, updatedAt: new Date() };
+    if (patchDoc.name) patchDoc.name = patchDoc.name.trim();
 
-    update.updatedAt = new Date();
-
-    const result = await itemsCollection.findOneAndUpdate(
+    const result = await db.collection("items").updateOne(
       { _id: new ObjectId(id) },
-      { $set: update },
-      { returnDocument: "after" }
+      { $set: patchDoc }
     );
 
-    if (!result.value) {
-      return res.status(404).json({ ok: false, error: "Item not found" });
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Not found" });
     }
 
-    return res.status(200).json({ ok: true, item: result.value });
+    const updated = await db.collection("items").findOne({ _id: new ObjectId(id) });
+    res.status(200).json(updated);
   } catch (err) {
-    console.error("PATCH /api/items/:id error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// DELETE /api/items/:id — delete an item
 app.delete("/api/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({ ok: false, error: "Invalid id" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const result = await itemsCollection.findOneAndDelete({ _id: new ObjectId(id) });
-
-    if (!result.value) {
-      return res.status(404).json({ ok: false, error: "Item not found" });
-    }
-
-    // 204 No Content — без тела
-    return res.status(204).send();
-  } catch (err) {
-    console.error("DELETE /api/items/:id error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
-  }
-});
-
-// ===== 404 handler (JSON only, MUST BE LAST) =====
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "Route not found" });
-});
-
-// ===== Start =====
-connectDB()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`🚀 Server listening on port ${PORT}`);
-      console.log(`Try: http://localhost:${PORT}/api/items`);
+    const result = await db.collection("items").deleteOne({
+      _id: new ObjectId(id)
     });
-  })
-  .catch((err) => {
-    console.error("❌ Failed to connect MongoDB:", err);
-    process.exit(1);
-  });
 
-// ===== Graceful shutdown =====
-process.on("SIGINT", async () => {
-  try {
-    if (client) await client.close();
-    console.log("\n✅ MongoDB connection closed. Bye!");
-    process.exit(0);
-  } catch {
-    process.exit(1);
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
+
+app.use((req, res) => {
+  res.status(404).json({ error: "Route not found" });
+});
+
+async function start() {
+  try {
+    if (!MONGO_URI) {
+      console.error("MONGO_URI is missing in environment variables");
+      process.exit(1);
+    }
+
+    const client = new MongoClient(MONGO_URI);
+    await client.connect();
+    db = client.db();
+
+    console.log("MongoDB connected");
+
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error("Startup error:", err);
+    process.exit(1);
+  }
+}
+
+start();
