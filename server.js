@@ -8,6 +8,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
+const API_KEY = process.env.API_KEY || "secret123";
 
 let db;
 
@@ -59,6 +60,13 @@ function validateItemPartial(body) {
   return null;
 }
 
+function apiKeyAuth(req, res, next) {
+  const key = req.header("x-api-key");
+  if (!key) return res.status(401).json({ error: "Unauthorized" });
+  if (key !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
+  next();
+}
+
 app.get("/", (req, res) => {
   res.status(200).json({ message: "API is working" });
 });
@@ -88,9 +96,7 @@ app.get("/api/items/:id", async (req, res) => {
       return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const item = await db
-      .collection("items")
-      .findOne({ _id: new ObjectId(id) });
+    const item = await db.collection("items").findOne({ _id: new ObjectId(id) });
 
     if (!item) {
       return res.status(404).json({ error: "Not found" });
@@ -103,7 +109,7 @@ app.get("/api/items/:id", async (req, res) => {
   }
 });
 
-app.post("/api/items", async (req, res) => {
+app.post("/api/items", apiKeyAuth, async (req, res) => {
   try {
     const validationError = validateItemFull(req.body);
     if (validationError) {
@@ -128,7 +134,7 @@ app.post("/api/items", async (req, res) => {
   }
 });
 
-app.put("/api/items/:id", async (req, res) => {
+app.put("/api/items/:id", apiKeyAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -165,7 +171,7 @@ app.put("/api/items/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/items/:id", async (req, res) => {
+app.patch("/api/items/:id", apiKeyAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -198,7 +204,7 @@ app.patch("/api/items/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/items/:id", async (req, res) => {
+app.delete("/api/items/:id", apiKeyAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -206,9 +212,7 @@ app.delete("/api/items/:id", async (req, res) => {
       return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const result = await db.collection("items").deleteOne({
-      _id: new ObjectId(id)
-    });
+    const result = await db.collection("items").deleteOne({ _id: new ObjectId(id) });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: "Not found" });
