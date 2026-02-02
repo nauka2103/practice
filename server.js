@@ -62,10 +62,18 @@ function validateItemPartial(body) {
 
 function apiKeyAuth(req, res, next) {
   const key = req.header("x-api-key");
-  if (!key) return res.status(401).json({ error: "Unauthorized" });
-  if (key !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+  if (!key) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  if (key !== API_KEY) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   next();
 }
+
 
 app.get("/", (req, res) => {
   res.status(200).json({ message: "API is working" });
